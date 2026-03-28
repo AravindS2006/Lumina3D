@@ -1,0 +1,12 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+python-multipart==0.0.20
+pyngrok==7.2.6
+opencv-python==4.12.0.88
+torch
+transformers
+diffusers
+accelerate
+bitsandbytes
+trimesh==4.8.1
+Pillow==11.3.0
