@@ -7,7 +7,7 @@ import GradientBackdrop from "../components/ui/GradientBackdrop";
 import { useGenerationJob } from "../hooks/useGenerationJob";
 
 export default function App() {
-  const { state, startJob } = useGenerationJob();
+  const { state, startJob, download } = useGenerationJob();
   const busy = ["queued", "running"].includes(state.phase);
 
   return (
@@ -41,7 +41,12 @@ export default function App() {
           transition={{ delay: 0.12, duration: 0.65, ease: "easeOut" }}
           className="h-full"
         >
-          <ModelShowcase downloadUrl={state.downloadUrl} isReady={state.phase === "complete"} />
+          <ModelShowcase
+            modelUrl={state.modelUrl}
+            isReady={state.phase === "complete"}
+            onDownload={download}
+            message={state.message}
+          />
         </motion.section>
       </div>
     </main>

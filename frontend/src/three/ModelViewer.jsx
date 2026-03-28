@@ -26,7 +26,7 @@ export default function ModelViewer({ modelUrl }) {
       <fog attach="fog" args={["#090d12", 4, 12]} />
       <SceneLights />
       <Suspense fallback={<Placeholder />}>
-        {modelUrl ? <Model modelUrl={modelUrl} /> : <Placeholder />}
+        {modelUrl ? <Model key={modelUrl} modelUrl={modelUrl} /> : <Placeholder />}
       </Suspense>
       <ContactShadows position={[0, -1.1, 0]} opacity={0.55} scale={7} blur={2.6} far={4.2} />
       <OrbitControls enableDamping makeDefault />
