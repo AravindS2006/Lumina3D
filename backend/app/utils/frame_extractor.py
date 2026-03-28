@@ -8,7 +8,7 @@ import cv2
 FRAME_LABELS = ["front", "right", "back", "left"]
 
 
-def extract_keyframes(video_path: Path, output_dir: Path) -> list[Path]:
+def extract_keyframes(video_path: Path, output_dir: Path) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
@@ -20,7 +20,7 @@ def extract_keyframes(video_path: Path, output_dir: Path) -> list[Path]:
         raise ValueError("Video has no frames")
 
     indices = [int(frame_count * i / 4) for i in range(4)]
-    saved: list[Path] = []
+    saved: dict[str, Path] = {}
 
     for label, idx in zip(FRAME_LABELS, indices):
         capture.set(cv2.CAP_PROP_POS_FRAMES, idx)
@@ -29,7 +29,7 @@ def extract_keyframes(video_path: Path, output_dir: Path) -> list[Path]:
             continue
         file_path = output_dir / f"{label}.png"
         cv2.imwrite(str(file_path), frame)
-        saved.append(file_path)
+        saved[label] = file_path
 
     capture.release()
     if len(saved) != 4:

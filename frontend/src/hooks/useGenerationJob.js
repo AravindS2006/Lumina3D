@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   downloadModelFile,
+  fetchRuntimeProbe,
   fetchModelBlob,
   fetchStatus,
   getDownloadUrl,
@@ -18,6 +19,11 @@ const initialState = {
   jobId: null,
   downloadUrl: null,
   modelUrl: null,
+  profile: "balanced",
+  engineTier: null,
+  warnings: [],
+  failureCode: null,
+  stageTimings: {},
 };
 
 export function useGenerationJob() {
@@ -39,6 +45,11 @@ export function useGenerationJob() {
         progress: status.progress,
         stage: status.stage,
         message: status.message,
+        profile: status.profile || prev.profile,
+        engineTier: status.engine_tier || prev.engineTier,
+        warnings: status.warnings || [],
+        failureCode: status.failure_code || null,
+        stageTimings: status.stage_timings || {},
         error: status.error || null,
         downloadUrl:
           status.status === "complete" ? getDownloadUrl(status.job_id) : prev.downloadUrl,
@@ -48,7 +59,7 @@ export function useGenerationJob() {
       setState((prev) => ({
         ...prev,
         phase: "failed",
-        error: error.message || "Polling failed",
+        error: error.message || "Status polling failed",
       }));
     }
   }, [state.jobId]);
@@ -60,8 +71,20 @@ export function useGenerationJob() {
       ...initialState,
       phase: "queued",
       message: "Submitting generation request",
+      profile: payload.profile || "balanced",
     });
     try {
+      const probe = await fetchRuntimeProbe();
+      const checks = probe?.module_checks || {};
+      const failing = Object.entries(checks).filter(([, status]) => !String(status).startsWith("ok"));
+      if (failing.length > 0) {
+        throw new Error(
+          `Backend runtime not ready: ${failing
+            .map(([name, status]) => `${name} -> ${status}`)
+            .join("; ")}`
+        );
+      }
+
       const data = await submitGeneration(payload);
       setState((prev) => ({ ...prev, phase: data.status, jobId: data.job_id }));
     } catch (error) {

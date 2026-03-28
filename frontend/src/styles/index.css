@@ -12,6 +12,8 @@ body {
   background: #070b11;
   color: #f4f8ff;
   font-family: "Manrope", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
@@ -22,6 +24,24 @@ body {
   background-image: theme("backgroundImage.mesh");
   background-size: 140% 140%;
   animation: meshDrift 14s ease-in-out infinite alternate;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+@media (max-width: 640px) {
+  .mesh-bg {
+    background-size: 190% 190%;
+    animation-duration: 18s;
+  }
 }
 
 @keyframes meshDrift {

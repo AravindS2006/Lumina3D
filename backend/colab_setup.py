@@ -24,6 +24,9 @@ def main() -> None:
         "bitsandbytes",
         "trimesh",
         "Pillow",
+        "huggingface-hub",
+        "einops",
+        "omegaconf",
     ]
     cmd = [sys.executable, "-m", "pip", "install", "-U", *packages]
     subprocess.run(cmd, check=True)
