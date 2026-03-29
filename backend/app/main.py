@@ -381,12 +381,31 @@ def run_job_pipeline(
 
         load_done = threading.Event()
 
+        def _mem_snapshot() -> str:
+            parts: list[str] = []
+            try:
+                import psutil  # type: ignore[import-untyped]
+
+                vm = psutil.virtual_memory()
+                parts.append(f"RAM {vm.percent:.0f}%")
+            except Exception:
+                pass
+            if torch.cuda.is_available():
+                try:
+                    alloc = torch.cuda.memory_allocated() / (1024**3)
+                    reserved = torch.cuda.memory_reserved() / (1024**3)
+                    parts.append(f"VRAM {alloc:.1f}/{reserved:.1f}GB")
+                except Exception:
+                    pass
+            return f" [{' ,'.join(parts)}]" if parts else ""
+
         def _load_heartbeat() -> None:
             while not load_done.is_set():
                 load_done.wait(timeout=10)
                 if load_done.is_set():
                     break
                 elapsed_s = round(perf_counter() - stage_start, 0)
+                mem = _mem_snapshot()
                 if needs_download:
                     _mark_stage(
                         job_id,
@@ -395,7 +414,7 @@ def run_job_pipeline(
                         stage="download_weights",
                         message=(
                             f"Still downloading Hunyuan3D-2mv weights... "
-                            f"({int(elapsed_s)}s elapsed). "
+                            f"({int(elapsed_s)}s elapsed){mem}. "
                             f"This is normal for first run on a new Colab session."
                         ),
                         warnings=warnings,
@@ -409,7 +428,7 @@ def run_job_pipeline(
                         stage="loading_geometry",
                         message=(
                             f"Loading model into GPU memory... "
-                            f"({int(elapsed_s)}s elapsed)"
+                            f"({int(elapsed_s)}s elapsed){mem}"
                         ),
                         warnings=warnings,
                         stage_timings=timings,
