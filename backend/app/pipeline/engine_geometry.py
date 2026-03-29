@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 from typing import Mapping
@@ -54,12 +55,42 @@ class GeometryEngine:
 
         from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline  # type: ignore
 
+        load_signature = inspect.signature(
+            Hunyuan3DDiTFlowMatchingPipeline.from_pretrained
+        )
+        supports = load_signature.parameters
+        prefer_fp16 = os.getenv("LUMINA_GEOMETRY_FP16", "1") == "1"
+
+        load_kwargs: dict[str, object] = {
+            "subfolder": "hunyuan3d-dit-v2-mv",
+            "use_safetensors": False,
+        }
+
+        if "device" in supports:
+            load_kwargs["device"] = "cuda"
+        elif "device_map" in supports:
+            load_kwargs["device_map"] = "cuda"
+
+        if "low_cpu_mem_usage" in supports:
+            load_kwargs["low_cpu_mem_usage"] = True
+
+        if prefer_fp16 and "torch_dtype" in supports:
+            load_kwargs["torch_dtype"] = torch.float16
+            self.runtime_warnings.append(
+                "Geometry loader using torch.float16 to reduce RAM"
+            )
+
         self._pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
             self.model_id,
-            subfolder="hunyuan3d-dit-v2-mv",
-            use_safetensors=False,
-            device="cuda",
+            **load_kwargs,
         )
+
+        if (
+            "device" not in supports
+            and "device_map" not in supports
+            and hasattr(self._pipeline, "to")
+        ):
+            self._pipeline = self._pipeline.to("cuda")
 
     def generate_mesh(
         self,

@@ -41,6 +41,34 @@ VALID_VIEWS = ("front", "left", "back", "right")
 FALLBACK_VIEW_ORDER = ("front", "left", "back", "right")
 
 
+def _memory_snapshot() -> tuple[float | None, float | None, float | None, float | None]:
+    ram_pct: float | None = None
+    vram_alloc_gb: float | None = None
+    vram_reserved_gb: float | None = None
+    vram_total_gb: float | None = None
+
+    try:
+        import psutil  # type: ignore[import-untyped]
+
+        ram_pct = float(psutil.virtual_memory().percent)
+    except Exception:
+        ram_pct = None
+
+    if torch.cuda.is_available():
+        try:
+            device_index = torch.cuda.current_device()
+            props = torch.cuda.get_device_properties(device_index)
+            vram_total_gb = props.total_memory / (1024**3)
+            vram_alloc_gb = torch.cuda.memory_allocated(device_index) / (1024**3)
+            vram_reserved_gb = torch.cuda.memory_reserved(device_index) / (1024**3)
+        except Exception:
+            vram_total_gb = None
+            vram_alloc_gb = None
+            vram_reserved_gb = None
+
+    return ram_pct, vram_alloc_gb, vram_reserved_gb, vram_total_gb
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
@@ -381,23 +409,22 @@ def run_job_pipeline(
 
         load_done = threading.Event()
 
-        def _mem_snapshot() -> str:
+        def _mem_snapshot() -> tuple[
+            str, float | None, float | None, float | None, float | None
+        ]:
+            ram_pct, alloc, reserved, total = _memory_snapshot()
             parts: list[str] = []
-            try:
-                import psutil  # type: ignore[import-untyped]
-
-                vm = psutil.virtual_memory()
-                parts.append(f"RAM {vm.percent:.0f}%")
-            except Exception:
-                pass
-            if torch.cuda.is_available():
-                try:
-                    alloc = torch.cuda.memory_allocated() / (1024**3)
-                    reserved = torch.cuda.memory_reserved() / (1024**3)
-                    parts.append(f"VRAM {alloc:.1f}/{reserved:.1f}GB")
-                except Exception:
-                    pass
-            return f" [{' ,'.join(parts)}]" if parts else ""
+            if ram_pct is not None:
+                parts.append(f"RAM {ram_pct:.0f}%")
+            if alloc is not None and reserved is not None and total is not None:
+                parts.append(f"VRAM {alloc:.1f}/{total:.1f}GB (res {reserved:.1f}GB)")
+            return (
+                f" [{' ,'.join(parts)}]" if parts else "",
+                ram_pct,
+                alloc,
+                reserved,
+                total,
+            )
 
         def _load_heartbeat() -> None:
             while not load_done.is_set():
@@ -405,7 +432,25 @@ def run_job_pipeline(
                 if load_done.is_set():
                     break
                 elapsed_s = round(perf_counter() - stage_start, 0)
-                mem = _mem_snapshot()
+                mem, ram_pct, alloc, reserved, total = _mem_snapshot()
+                if (
+                    ram_pct is not None
+                    and ram_pct >= 96
+                    and alloc is not None
+                    and total is not None
+                ):
+                    warning = "System RAM is above 96% during geometry load. Worker may be killed by OOM; consider using low_vram profile and restarting fresh Colab runtime."
+                    if warning not in warnings:
+                        warnings.append(warning)
+                if (
+                    alloc is not None
+                    and total is not None
+                    and alloc <= 0.1
+                    and needs_download
+                ):
+                    warning = "GPU memory is still near 0GB while downloading geometry weights; this indicates model files are still downloading or CPU RAM pressure is blocking model init."
+                    if warning not in warnings:
+                        warnings.append(warning)
                 if needs_download:
                     _mark_stage(
                         job_id,
@@ -420,6 +465,17 @@ def run_job_pipeline(
                         warnings=warnings,
                         stage_timings=timings,
                     )
+                    if (
+                        ram_pct is not None
+                        and ram_pct >= 97
+                        and elapsed_s >= 120
+                        and load_done.is_set() is False
+                    ):
+                        raise RuntimeError(
+                            "Geometry weight download exceeded safe RAM budget (>=97% for over 2 minutes). "
+                            "Colab likely killed the worker due to memory pressure before model init. "
+                            "Restart runtime, use low_vram profile, and keep other notebook tabs/processes closed."
+                        )
                 else:
                     _mark_stage(
                         job_id,
@@ -597,6 +653,9 @@ def run_job_pipeline(
         if failure_code == "cuda_unavailable":
             failure_stage = "geometry_runtime_unavailable"
             failure_message = "CUDA GPU runtime unavailable. Switch to Colab GPU runtime and restart backend."
+        elif failure_code == "host_ram_oom_risk":
+            failure_stage = "geometry_runtime_unavailable"
+            failure_message = "Host RAM exhausted during geometry weight download. Restart fresh Colab runtime and retry with low_vram profile."
 
         job_store.update(
             job_id,

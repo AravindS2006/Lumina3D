@@ -83,6 +83,13 @@ export default function ProcessTracer({ state }) {
         <p className="mt-3 text-[11px] text-rose-300 sm:text-xs">Failure Code: {state.failureCode}</p>
       )}
 
+      {state.failureCode === "host_ram_oom_risk" && (
+        <div className="mt-2 rounded-lg border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-[11px] text-rose-100 sm:text-xs">
+          Colab host RAM was exhausted during model download. Restart runtime, keep only this
+          notebook running, and retry with `low_vram` profile.
+        </div>
+      )}
+
       {state.error && <p className="mt-2 text-xs text-rose-300 sm:text-sm">{state.error}</p>}
 
       <p className="mt-2 text-[11px] text-white/55 sm:text-xs">

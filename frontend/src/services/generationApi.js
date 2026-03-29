@@ -97,7 +97,7 @@ function mapAxiosError(error, action) {
   }
   if (status === 502 || status === 503 || status === 504) {
     if (isNgrokBase(base)) {
-      return `${action} failed (${status}) at ${base}. Ngrok tunnel is stale or backend is not listening on 127.0.0.1:8000 in Colab. Restart Colab notebook, copy fresh ngrok URL, update frontend/.env, restart frontend dev server.`;
+      return `${action} failed (${status}) at ${base}. Backend worker likely crashed under high RAM during model download (check job warnings and Colab logs). Restart runtime, rerun notebook cells, and keep RAM below 95% before generation.`;
     }
     return `${action} failed (${status}) at ${base}. Backend may be offline.`;
   }
@@ -110,10 +110,10 @@ function mapAxiosError(error, action) {
         `${action} could not reach ${base}.`,
         "",
         "Fix steps:",
-        "1) In Colab, verify backend is running (check uvicorn cell output).",
-        "2) Copy the CURRENT ngrok URL from the notebook output.",
-        "3) Paste it into frontend/.env as VITE_API_BASE_URL (no trailing slash).",
-        "4) Stop and restart `npm run dev` in the frontend terminal.",
+        "1) In Colab, check RAM usage and uvicorn logs for worker restart/OOM.",
+        "2) Restart runtime if RAM was above 95% during download.",
+        "3) Re-run notebook cells to recreate backend and tunnel.",
+        "4) Update frontend/.env with fresh URL and restart `npm run dev`.",
       ].join("\n");
     }
     return `${action} could not reach backend at ${base}. Start FastAPI on port 8000.`;
