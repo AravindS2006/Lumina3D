@@ -1,26 +1,63 @@
 from __future__ import annotations
 
+import os
+import sqlite3
 from datetime import datetime
-from threading import Lock
+from pathlib import Path
 from typing import Optional
 
 from app.schemas.job import JobRecord
 
+_DB_PATH = Path(
+    os.getenv(
+        "LUMINA_JOB_DB",
+        str(Path(__file__).resolve().parents[2] / "outputs" / "jobs.db"),
+    )
+)
+
+
+def _open() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_DB_PATH), timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS jobs (
+        job_id TEXT PRIMARY KEY,
+        data   TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+        )"""
+    )
+    conn.commit()
+    return conn
+
 
 class JobStore:
-    def __init__(self) -> None:
-        self._jobs: dict[str, JobRecord] = {}
-        self._lock = Lock()
-
     def create(self, job_id: str, profile: str = "balanced") -> JobRecord:
-        with self._lock:
-            record = JobRecord(job_id=job_id, profile=profile)
-            self._jobs[job_id] = record
-            return record
+        record = JobRecord(job_id=job_id, profile=profile)
+        now = datetime.utcnow().isoformat()
+        conn = _open()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO jobs (job_id, data, updated_at) VALUES (?, ?, ?)",
+                (job_id, record.model_dump_json(), now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return record
 
     def get(self, job_id: str) -> Optional[JobRecord]:
-        with self._lock:
-            return self._jobs.get(job_id)
+        conn = _open()
+        try:
+            row = conn.execute(
+                "SELECT data FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        return JobRecord.model_validate_json(row[0])
 
     def update(
         self,
@@ -38,10 +75,15 @@ class JobStore:
         stage_timings: Optional[dict[str, float]] = None,
         error: Optional[str] = None,
     ) -> Optional[JobRecord]:
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if not job:
+        conn = _open()
+        try:
+            row = conn.execute(
+                "SELECT data FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if not row:
                 return None
+
+            job = JobRecord.model_validate_json(row[0])
             if profile is not None:
                 job.profile = profile
             if status is not None:
@@ -65,5 +107,13 @@ class JobStore:
             if error is not None:
                 job.error = error
             job.updated_at = datetime.utcnow()
-            self._jobs[job_id] = job
-            return job
+
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                "UPDATE jobs SET data = ?, updated_at = ? WHERE job_id = ?",
+                (job.model_dump_json(), now, job_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return job
