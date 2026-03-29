@@ -28,8 +28,35 @@ class GeometryEngine:
         base = os.path.expanduser(os.getenv("HY3DGEN_MODELS", "~/.cache/hy3dgen"))
         return Path(base) / "tencent" / "Hunyuan3D-2mv" / "hunyuan3d-dit-v2-mv"
 
+    def _hf_snapshot_dirs(self) -> list[Path]:
+        hf_home = Path(os.path.expanduser(os.getenv("HF_HOME", "~/.cache/huggingface")))
+        snapshots_root = (
+            hf_home / "hub" / "models--tencent--Hunyuan3D-2mv" / "snapshots"
+        )
+        if not snapshots_root.exists():
+            return []
+        dirs: list[Path] = []
+        for snapshot in snapshots_root.iterdir():
+            if snapshot.is_dir():
+                dirs.append(snapshot / "hunyuan3d-dit-v2-mv")
+        return dirs
+
+    def _cache_candidates(self) -> list[Path]:
+        return [self._hy3d_cache_dir(), *self._hf_snapshot_dirs()]
+
+    @staticmethod
+    def _has_weights(path: Path) -> bool:
+        if not path.exists() or not path.is_dir():
+            return False
+        for pattern in ("*.bin", "*.safetensors", "*.pt", "*.pth"):
+            if any(path.glob(pattern)):
+                return True
+        return False
+
     def is_cached(self) -> bool:
-        return self._hy3d_cache_dir().exists()
+        return any(
+            self._has_weights(candidate) for candidate in self._cache_candidates()
+        )
 
     def load(self) -> None:
         if not torch.cuda.is_available():
@@ -65,6 +92,18 @@ class GeometryEngine:
             "subfolder": "hunyuan3d-dit-v2-mv",
             "use_safetensors": False,
         }
+
+        if "cache_dir" in supports:
+            load_kwargs["cache_dir"] = os.path.expanduser(
+                os.getenv("HY3DGEN_MODELS", "~/.cache/hy3dgen")
+            )
+
+        cached = self.is_cached()
+        if cached and "local_files_only" in supports:
+            load_kwargs["local_files_only"] = True
+            self.runtime_warnings.append(
+                "Using local cached geometry weights (local_files_only=True)"
+            )
 
         if "device" in supports:
             load_kwargs["device"] = "cuda"

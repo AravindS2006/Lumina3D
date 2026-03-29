@@ -381,6 +381,15 @@ def run_job_pipeline(
         geometry_engine = GeometryEngine()
         needs_download = not geometry_engine.is_cached()
 
+        if needs_download:
+            warnings.append(
+                "Geometry cache miss detected. First run downloads multi-GB weights; CPU RAM may spike heavily on free Colab runtimes."
+            )
+        else:
+            warnings.append(
+                "Geometry cache detected. Skipping Hugging Face download and loading local weights."
+            )
+
         load_timeout_s = int(os.getenv("LUMINA_GEOMETRY_LOAD_TIMEOUT", "900"))
 
         if needs_download:
@@ -449,6 +458,17 @@ def run_job_pipeline(
                     and needs_download
                 ):
                     warning = "GPU memory is still near 0GB while downloading geometry weights; this indicates model files are still downloading or CPU RAM pressure is blocking model init."
+                    if warning not in warnings:
+                        warnings.append(warning)
+
+                if (
+                    alloc is not None
+                    and total is not None
+                    and alloc <= 0.1
+                    and not needs_download
+                    and elapsed_s >= 60
+                ):
+                    warning = "Cache exists but GPU allocation is still near 0GB after 60s. This often means CPU RAM pressure during deserialization; restart runtime and retry."
                     if warning not in warnings:
                         warnings.append(warning)
                 if needs_download:

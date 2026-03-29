@@ -79,6 +79,13 @@ export default function ProcessTracer({ state }) {
         </div>
       )}
 
+      {state.warnings?.some((warning) => warning.includes("Geometry cache miss detected")) && (
+        <div className="mt-2 rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-[11px] text-cyan-100 sm:text-xs">
+          First run is downloading multi-GB geometry weights. This can take several minutes and
+          may fail on low host RAM. After a successful first run, later runs should skip download.
+        </div>
+      )}
+
       {state.failureCode && (
         <p className="mt-3 text-[11px] text-rose-300 sm:text-xs">Failure Code: {state.failureCode}</p>
       )}
