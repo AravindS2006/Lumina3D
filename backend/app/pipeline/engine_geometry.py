@@ -45,6 +45,20 @@ class GeometryEngine:
         return [self._hy3d_cache_dir(), *self._hf_snapshot_dirs()]
 
     @staticmethod
+    def _dir_size_bytes(path: Path) -> int:
+        total = 0
+        if not path.exists() or not path.is_dir():
+            return total
+        for child in path.rglob("*"):
+            if not child.is_file():
+                continue
+            try:
+                total += child.stat().st_size
+            except OSError:
+                continue
+        return total
+
+    @staticmethod
     def _has_weights(path: Path) -> bool:
         if not path.exists() or not path.is_dir():
             return False
@@ -56,6 +70,36 @@ class GeometryEngine:
     def is_cached(self) -> bool:
         return any(
             self._has_weights(candidate) for candidate in self._cache_candidates()
+        )
+
+    def cache_size_mb(self) -> float:
+        sizes = [
+            self._dir_size_bytes(candidate) for candidate in self._cache_candidates()
+        ]
+        if not sizes:
+            return 0.0
+        return max(sizes) / (1024**2)
+
+    def prefetch_weights(self) -> None:
+        if self.is_cached():
+            return
+        try:
+            from huggingface_hub import snapshot_download
+        except Exception as exc:  # noqa: BLE001
+            self.runtime_warnings.append(
+                f"huggingface_hub snapshot downloader unavailable: {exc}"
+            )
+            return
+
+        cache_dir = os.path.expanduser(os.getenv("HY3DGEN_MODELS", "~/.cache/hy3dgen"))
+        snapshot_download(
+            repo_id=self.model_id,
+            allow_patterns=["hunyuan3d-dit-v2-mv/*"],
+            cache_dir=cache_dir,
+            resume_download=True,
+        )
+        self.runtime_warnings.append(
+            f"Geometry weights prefetched to cache dir: {cache_dir}"
         )
 
     def load(self) -> None:

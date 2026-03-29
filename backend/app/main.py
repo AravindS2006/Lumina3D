@@ -380,6 +380,7 @@ def run_job_pipeline(
         stage_start = perf_counter()
         geometry_engine = GeometryEngine()
         needs_download = not geometry_engine.is_cached()
+        cached_size_mb = geometry_engine.cache_size_mb()
 
         if needs_download:
             warnings.append(
@@ -387,7 +388,7 @@ def run_job_pipeline(
             )
         else:
             warnings.append(
-                "Geometry cache detected. Skipping Hugging Face download and loading local weights."
+                f"Geometry cache detected (~{cached_size_mb:.0f} MB). Skipping Hugging Face download and loading local weights."
             )
 
         load_timeout_s = int(os.getenv("LUMINA_GEOMETRY_LOAD_TIMEOUT", "900"))
@@ -405,6 +406,31 @@ def run_job_pipeline(
                 warnings=warnings,
                 stage_timings=timings,
             )
+
+            _mark_stage(
+                job_id,
+                status=None,
+                progress=32,
+                stage="download_weights",
+                message="Prefetching Hunyuan3D-2mv snapshots before model init...",
+                warnings=warnings,
+                stage_timings=timings,
+            )
+            prefetch_start = perf_counter()
+            geometry_engine.prefetch_weights()
+            timings["prefetch_geometry_weights"] = round(
+                perf_counter() - prefetch_start, 3
+            )
+            needs_download = not geometry_engine.is_cached()
+            cached_size_mb = geometry_engine.cache_size_mb()
+            if not needs_download:
+                warning = f"Geometry weights prefetched successfully (~{cached_size_mb:.0f} MB cached)."
+                if warning not in warnings:
+                    warnings.append(warning)
+            else:
+                warning = "Geometry prefetch did not complete cache warmup; loader may continue downloading during initialization."
+                if warning not in warnings:
+                    warnings.append(warning)
         else:
             _mark_stage(
                 job_id,
@@ -456,6 +482,7 @@ def run_job_pipeline(
                     and total is not None
                     and alloc <= 0.1
                     and needs_download
+                    and elapsed_s >= 90
                 ):
                     warning = "GPU memory is still near 0GB while downloading geometry weights; this indicates model files are still downloading or CPU RAM pressure is blocking model init."
                     if warning not in warnings:
@@ -543,6 +570,7 @@ def run_job_pipeline(
             )
 
         warnings.extend(geometry_engine.runtime_warnings)
+        warnings = list(dict.fromkeys(warnings))
         load_elapsed = round(perf_counter() - stage_start, 3)
         timings["load_geometry_engine"] = load_elapsed
         logger.info(

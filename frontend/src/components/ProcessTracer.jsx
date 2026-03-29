@@ -86,6 +86,12 @@ export default function ProcessTracer({ state }) {
         </div>
       )}
 
+      {state.warnings?.some((warning) => warning.includes("Geometry weights prefetched successfully")) && (
+        <div className="mt-2 rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-[11px] text-emerald-100 sm:text-xs">
+          Geometry cache warmup completed. Next runs should skip download and move faster.
+        </div>
+      )}
+
       {state.failureCode && (
         <p className="mt-3 text-[11px] text-rose-300 sm:text-xs">Failure Code: {state.failureCode}</p>
       )}
