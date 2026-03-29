@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   downloadModelFile,
   fetchRuntimeProbe,
+  fetchHealth,
   fetchModelBlob,
   fetchStatus,
   getDownloadUrl,
@@ -70,19 +71,48 @@ export function useGenerationJob() {
     setState({
       ...initialState,
       phase: "queued",
-      message: "Submitting generation request",
+      message: "Running backend preflight checks (/healthz + /debug/runtime)",
       profile: payload.profile || "balanced",
     });
     try {
+      const health = await fetchHealth();
+      if (health?.cuda_available === false) {
+        throw new Error(
+          "Backend is running without CUDA GPU. Switch notebook to Colab GPU runtime or set LUMINA_REQUIRE_CUDA=0 only for debugging."
+        );
+      }
+
       const probe = await fetchRuntimeProbe();
       const checks = probe?.module_checks || {};
-      const failing = Object.entries(checks).filter(([, status]) => !String(status).startsWith("ok"));
-      if (failing.length > 0) {
+      const shapeOk = String(checks["hy3dgen.shapegen"] || "").startsWith("ok");
+      const tex20Ok = String(checks["hy3dgen.texgen"] || "").startsWith("ok");
+      const tex21Ok = String(checks["hy3dpaint.textureGenPipeline"] || "").startsWith("ok");
+
+      if (!shapeOk) {
         throw new Error(
-          `Backend runtime not ready: ${failing
-            .map(([name, status]) => `${name} -> ${status}`)
-            .join("; ")}`
+          `Backend runtime not ready: hy3dgen.shapegen -> ${checks["hy3dgen.shapegen"] || "missing"}`
         );
+      }
+
+      if (!tex20Ok && !tex21Ok) {
+        throw new Error(
+          `Backend runtime not ready for texturing: hy3dpaint.textureGenPipeline -> ${checks["hy3dpaint.textureGenPipeline"] || "missing"}; hy3dgen.texgen -> ${checks["hy3dgen.texgen"] || "missing"}`
+        );
+      }
+
+      if (!tex21Ok && tex20Ok) {
+        const cacheInfo = probe?.cache_info || {};
+        const warmupHint = cacheInfo.hunyuan2mv_present
+          ? ""
+          : "First run is downloading Hunyuan3D-2mv weights. This can take several minutes.";
+        setState((prev) => ({
+          ...prev,
+          warnings: [
+            ...(prev.warnings || []),
+            "Hunyuan3D-2.1 paint is unavailable. Backend will fallback to hunyuan20_paint tier.",
+            ...(warmupHint ? [warmupHint] : []),
+          ],
+        }));
       }
 
       const data = await submitGeneration(payload);

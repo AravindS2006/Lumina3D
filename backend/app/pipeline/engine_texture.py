@@ -5,7 +5,10 @@ from pathlib import Path
 import trimesh
 
 from app.pipeline.profiles import RuntimeProfile
-from app.pipeline.runtime_bootstrap import ensure_hunyuan_paths
+from app.pipeline.runtime_bootstrap import (
+    ensure_hunyuan_paths,
+    prepare_hy3dpaint_runtime,
+)
 
 
 class TextureEngine:
@@ -37,6 +40,7 @@ class TextureEngine:
         raise ValueError(f"Unknown texture tier: {tier}")
 
     def _load_hunyuan21(self) -> None:
+        self.runtime_warnings.extend(prepare_hy3dpaint_runtime())
         from hy3dpaint.textureGenPipeline import (  # type: ignore
             Hunyuan3DPaintConfig,
             Hunyuan3DPaintPipeline,

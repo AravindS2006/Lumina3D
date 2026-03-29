@@ -6,7 +6,9 @@ import { stageState } from "../utils/progressMapper";
 const stages = [
   { key: "waiting_gpu", label: "Waiting GPU Slot" },
   { key: "extracting_frames", label: "Extracting Frames" },
+  { key: "download_weights", label: "Downloading Weights" },
   { key: "loading_geometry", label: "Loading Geometry" },
+  { key: "geometry_runtime_unavailable", label: "GPU Runtime Needed" },
   { key: "generating_geometry", label: "Generating Geometry" },
   { key: "cleanup_geometry", label: "VRAM Cleanup" },
   { key: "loading_texture", label: "Loading Texture" },
@@ -87,6 +89,14 @@ export default function ProcessTracer({ state }) {
         Tip: if you see 404, test the health endpoint on your API base URL and ensure the
         frontend was restarted after .env changes.
       </p>
+
+      {(state.phase === "idle" || state.phase === "queued") && (
+        <div className="mt-3 rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-[11px] text-cyan-100 sm:text-xs">
+          Preflight checks run before generation: `/healthz` must report `cuda_available: true`
+          and `/debug/runtime` must pass module checks. If using ngrok, refresh the tunnel URL
+          in `.env` and restart frontend after each Colab restart.
+        </div>
+      )}
     </GlassCard>
   );
 }

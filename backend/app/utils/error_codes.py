@@ -3,6 +3,8 @@ from __future__ import annotations
 
 def map_failure_code(exc: Exception) -> str:
     message = str(exc).lower()
+    if "cuda is unavailable" in message or "cuda gpu is required" in message:
+        return "cuda_unavailable"
     if "out of memory" in message or "cuda oom" in message:
         return "oom"
     if "no module named" in message or "import" in message:

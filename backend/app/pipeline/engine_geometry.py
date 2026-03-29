@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Mapping
 
+import torch
 import trimesh
 
 from app.pipeline.profiles import RuntimeProfile
@@ -21,11 +23,33 @@ class GeometryEngine:
         self._pipeline = None
         self.runtime_warnings: list[str] = []
 
+    def _hy3d_cache_dir(self) -> Path:
+        base = os.path.expanduser(os.getenv("HY3DGEN_MODELS", "~/.cache/hy3dgen"))
+        return Path(base) / "tencent" / "Hunyuan3D-2mv" / "hunyuan3d-dit-v2-mv"
+
+    def is_cached(self) -> bool:
+        return self._hy3d_cache_dir().exists()
+
     def load(self) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is unavailable. Hunyuan3D-2mv geometry generation requires a GPU runtime (for example, Colab T4)."
+            )
+
         bootstrap = ensure_hunyuan_paths()
         if not bootstrap["paths_added"]:
             self.runtime_warnings.append(
                 "Hunyuan runtime paths not found; geometry fallback may be used."
+            )
+
+        cache_dir = self._hy3d_cache_dir()
+        if not cache_dir.exists():
+            self.runtime_warnings.append(
+                f"Model cache not found at {cache_dir}. First run will download weights."
+            )
+        else:
+            self.runtime_warnings.append(
+                f"Using cached geometry weights from {cache_dir}"
             )
 
         from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline  # type: ignore

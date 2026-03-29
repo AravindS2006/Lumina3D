@@ -6,35 +6,40 @@ function normalizeBase(base) {
   return (base || "").replace(/\/+$/, "");
 }
 
-function activeBase() {
-  return normalizeBase(apiClient.defaults.baseURL);
-}
-
-async function isHealthy(baseURL) {
-  if (!baseURL) {
-    return false;
+function isLoopbackBase(base) {
+  if (!base) {
+    return true;
   }
+
   try {
-    const response = await apiClient.get(`${baseURL}/healthz`, {
-      timeout: 6000,
-      headers: { "ngrok-skip-browser-warning": "69420" },
-    });
-    if (response.status !== 200) {
-      return false;
-    }
-    const payload = response.data || {};
-    if (typeof payload !== "object") {
-      return false;
-    }
-    return payload.runtime_probe === true;
+    const { hostname } = new URL(base);
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   } catch {
     return false;
   }
 }
 
-async function ensureReachableBackend() {
+function isNgrokBase(base) {
+  if (!base) {
+    return false;
+  }
+
+  try {
+    const { hostname } = new URL(base);
+    return hostname.toLowerCase().includes("ngrok");
+  } catch {
+    return false;
+  }
+}
+
+function activeBase() {
+  return normalizeBase(apiClient.defaults.baseURL);
+}
+
+export async function ensureReachableBackend() {
   const current = activeBase();
-  if (await isHealthy(current)) {
+
+  if (!isLoopbackBase(current)) {
     return current;
   }
 
@@ -42,13 +47,41 @@ async function ensureReachableBackend() {
     if (fallback === current) {
       continue;
     }
-    if (await isHealthy(fallback)) {
-      apiClient.defaults.baseURL = fallback;
-      return fallback;
+    try {
+      const response = await apiClient.get(`${fallback}/healthz`, {
+        timeout: 4000,
+        headers: { "ngrok-skip-browser-warning": "69420" },
+      });
+      if (response.status === 200 && response.data?.runtime_probe === true) {
+        apiClient.defaults.baseURL = fallback;
+        return fallback;
+      }
+    } catch {
+      // not reachable
     }
   }
 
   return current;
+}
+
+export async function fetchHealth() {
+  await ensureReachableBackend();
+  const base = activeBase();
+  try {
+    const { data } = await apiClient.get(`${base}/healthz`, {
+      headers: { "ngrok-skip-browser-warning": "69420" },
+      timeout: 8000,
+    });
+    if (data?.runtime_probe !== true) {
+      throw new Error(staleBackendError(base));
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("runtime_probe=true")) {
+      throw error;
+    }
+    throw new Error(mapAxiosError(error, "Health check"));
+  }
 }
 
 function mapAxiosError(error, action) {
@@ -63,21 +96,37 @@ function mapAxiosError(error, action) {
     return `${action} failed (405). Endpoint exists but method is wrong.`;
   }
   if (status === 502 || status === 503 || status === 504) {
-    return `${action} failed (${status}). Tunnel/backend may be offline.`;
+    if (isNgrokBase(base)) {
+      return `${action} failed (${status}) at ${base}. Ngrok tunnel is stale or backend is not listening on 127.0.0.1:8000 in Colab. Restart Colab notebook, copy fresh ngrok URL, update frontend/.env, restart frontend dev server.`;
+    }
+    return `${action} failed (${status}) at ${base}. Backend may be offline.`;
+  }
+
+  const networkCode = error?.code;
+  const networkMessage = String(error?.message || "").toLowerCase();
+  if (!status && (networkCode === "ERR_NETWORK" || networkMessage.includes("network error"))) {
+    if (isNgrokBase(base)) {
+      return [
+        `${action} could not reach ${base}.`,
+        "",
+        "Fix steps:",
+        "1) In Colab, verify backend is running (check uvicorn cell output).",
+        "2) Copy the CURRENT ngrok URL from the notebook output.",
+        "3) Paste it into frontend/.env as VITE_API_BASE_URL (no trailing slash).",
+        "4) Stop and restart `npm run dev` in the frontend terminal.",
+      ].join("\n");
+    }
+    return `${action} could not reach backend at ${base}. Start FastAPI on port 8000.`;
   }
   return detail || error?.message || `${action} failed at ${base}`;
 }
 
-function staleBackendError() {
-  const base = activeBase() || "<unset-base-url>";
+function staleBackendError(base = activeBase() || "<unset-base-url>") {
   return `Backend at ${base} is reachable but outdated. Restart backend from latest code. /healthz must include runtime_probe=true.`;
 }
 
 export async function fetchRuntimeProbe() {
-  const resolved = await ensureReachableBackend();
-  if (!(await isHealthy(resolved))) {
-    throw new Error(staleBackendError());
-  }
+  await ensureReachableBackend();
   try {
     const { data } = await apiClient.get("/debug/runtime");
     return data;
@@ -162,4 +211,4 @@ export async function downloadModelFile(jobId) {
   }
 }
 
-export { mapAxiosError, ensureReachableBackend };
+export { mapAxiosError };

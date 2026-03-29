@@ -5,19 +5,22 @@ import logging
 import os
 import shutil
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 from threading import Lock
 from time import perf_counter
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+import torch
 
 from app.pipeline.engine_geometry import GeometryEngine
 from app.pipeline.engine_texture import TextureEngine
 from app.pipeline.profiles import RuntimeProfile, resolve_profile
-from app.pipeline.runtime_bootstrap import probe_hunyuan_runtime
+from app.pipeline.runtime_bootstrap import get_hf_cache_info, probe_hunyuan_runtime
 from app.pipeline.vram import purge_cuda_memory
 from app.schemas.job import JobStatusResponse
 from app.utils.error_codes import map_failure_code
@@ -27,6 +30,8 @@ from app.utils.job_store import JobStore
 
 
 logger = logging.getLogger("lumina3d.api")
+MODEL_DOWNLOAD_LOCK = Lock()
+_pipeline_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pipeline")
 
 app = FastAPI(title="Lumina3D API", version="0.2.0")
 job_store = JobStore()
@@ -73,23 +78,32 @@ def healthz() -> dict[str, object]:
         "status": "ok",
         "api_version": app.version,
         "runtime_probe": True,
+        "cuda_available": torch.cuda.is_available(),
     }
 
 
 @app.get("/debug/runtime")
 def debug_runtime() -> dict[str, object]:
     """Quick runtime diagnostics for model imports and path bootstrapping."""
-    return probe_hunyuan_runtime()
+    payload = probe_hunyuan_runtime()
+    payload["cache_info"] = get_hf_cache_info()
+    return payload
 
 
 @app.post("/generate")
 async def generate(
-    background_tasks: BackgroundTasks,
     video: Optional[UploadFile] = File(default=None),
     images: Optional[list[UploadFile]] = File(default=None),
     profile: str = Form(default="balanced"),
     view_labels: Optional[str] = Form(default=None),
 ) -> dict[str, str]:
+    require_cuda = os.getenv("LUMINA_REQUIRE_CUDA", "1") == "1"
+    if require_cuda and not torch.cuda.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="CUDA GPU is required for generation. Use Colab GPU runtime or set LUMINA_REQUIRE_CUDA=0 explicitly for local debug.",
+        )
+
     if video is None and not images:
         raise HTTPException(status_code=400, detail="Provide either a video or images")
     if video is not None and images:
@@ -125,7 +139,7 @@ async def generate(
             image_paths.append(img_path)
             image_names.append(original_name)
 
-    background_tasks.add_task(
+    _pipeline_executor.submit(
         run_job_pipeline,
         job_id,
         video_path,
@@ -335,20 +349,112 @@ def run_job_pipeline(
         if not image_views:
             raise ValueError("No usable image views found after preprocessing")
 
-        _mark_stage(
-            job_id,
-            status=None,
-            progress=30,
-            stage="loading_geometry",
-            message="Loading Hunyuan3D-2mv geometry engine",
-            warnings=warnings,
-            stage_timings=timings,
-        )
         stage_start = perf_counter()
         geometry_engine = GeometryEngine()
-        geometry_engine.load()
+        needs_download = not geometry_engine.is_cached()
+
+        load_timeout_s = int(os.getenv("LUMINA_GEOMETRY_LOAD_TIMEOUT", "900"))
+
+        if needs_download:
+            _mark_stage(
+                job_id,
+                status=None,
+                progress=31,
+                stage="download_weights",
+                message=(
+                    f"Hunyuan3D-2mv weights not cached. Downloading from Hugging Face "
+                    f"(up to {load_timeout_s // 60} min on first run)..."
+                ),
+                warnings=warnings,
+                stage_timings=timings,
+            )
+        else:
+            _mark_stage(
+                job_id,
+                status=None,
+                progress=32,
+                stage="loading_geometry",
+                message="Loading cached Hunyuan3D-2mv weights into GPU...",
+                warnings=warnings,
+                stage_timings=timings,
+            )
+
+        load_done = threading.Event()
+
+        def _load_heartbeat() -> None:
+            while not load_done.is_set():
+                load_done.wait(timeout=10)
+                if load_done.is_set():
+                    break
+                elapsed_s = round(perf_counter() - stage_start, 0)
+                if needs_download:
+                    _mark_stage(
+                        job_id,
+                        status=None,
+                        progress=33,
+                        stage="download_weights",
+                        message=(
+                            f"Still downloading Hunyuan3D-2mv weights... "
+                            f"({int(elapsed_s)}s elapsed). "
+                            f"This is normal for first run on a new Colab session."
+                        ),
+                        warnings=warnings,
+                        stage_timings=timings,
+                    )
+                else:
+                    _mark_stage(
+                        job_id,
+                        status=None,
+                        progress=34,
+                        stage="loading_geometry",
+                        message=(
+                            f"Loading model into GPU memory... "
+                            f"({int(elapsed_s)}s elapsed)"
+                        ),
+                        warnings=warnings,
+                        stage_timings=timings,
+                    )
+
+        heartbeat = threading.Thread(target=_load_heartbeat, daemon=True)
+
+        load_error: list[Exception] = []
+
+        def _run_load() -> None:
+            try:
+                geometry_engine.load()
+            except Exception as exc:  # noqa: BLE001
+                load_error.append(exc)
+            finally:
+                load_done.set()
+
+        load_thread = threading.Thread(target=_run_load, daemon=True)
+
+        with MODEL_DOWNLOAD_LOCK:
+            heartbeat.start()
+            load_thread.start()
+            load_thread.join(timeout=load_timeout_s)
+
+        load_done.set()
+        heartbeat.join(timeout=15)
+
+        if not load_thread.is_alive() and load_error:
+            raise load_error[0]
+
+        if load_thread.is_alive():
+            raise RuntimeError(
+                f"Geometry engine load timed out after {load_timeout_s}s. "
+                "Possible causes: very slow download, GPU unavailable, or hung model init. "
+                "Set LUMINA_GEOMETRY_LOAD_TIMEOUT env var to increase the limit."
+            )
+
         warnings.extend(geometry_engine.runtime_warnings)
-        timings["load_geometry_engine"] = round(perf_counter() - stage_start, 3)
+        load_elapsed = round(perf_counter() - stage_start, 3)
+        timings["load_geometry_engine"] = load_elapsed
+        logger.info(
+            "Geometry engine loaded in %.1fs (download_needed=%s)",
+            load_elapsed,
+            needs_download,
+        )
 
         _mark_stage(
             job_id,
@@ -466,12 +572,19 @@ def run_job_pipeline(
     except Exception as exc:
         purge_cuda_memory()
         failure_code = map_failure_code(exc)
+        failure_stage = "failed"
+        failure_message = "Generation failed"
+
+        if failure_code == "cuda_unavailable":
+            failure_stage = "geometry_runtime_unavailable"
+            failure_message = "CUDA GPU runtime unavailable. Switch to Colab GPU runtime and restart backend."
+
         job_store.update(
             job_id,
             status="failed",
-            stage="failed",
+            stage=failure_stage,
             progress=100,
-            message="Generation failed",
+            message=failure_message,
             failure_code=failure_code,
             warnings=warnings,
             stage_timings=timings,

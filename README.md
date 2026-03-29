@@ -12,10 +12,16 @@ Lumina3D is a video-to-3D reconstruction platform with a React frontend and a Fa
 
 1. Open `backend/Lumina3D_Colab_Server.ipynb`.
 2. Run all cells top to bottom.
-3. Paste your `NGROK_AUTHTOKEN` in the environment cell.
-4. Keep the Uvicorn cell running.
+3. Ensure runtime is Google Colab with GPU enabled (T4 or better).
+4. Paste your `NGROK_AUTHTOKEN` in the environment cell.
+5. Keep the Uvicorn cell running.
 
 The notebook launches FastAPI locally and creates a fresh ngrok URL for each session.
+
+Important:
+
+- Tunnel is created with explicit upstream `127.0.0.1:8000` to avoid ngrok private-leg errors like `ERR_NGROK_8012`.
+- Notebook supports both Colab and local kernels, but real generation quality/perf is best on Colab GPU.
 
 Before first generate call, run runtime diagnostics:
 
@@ -76,6 +82,20 @@ The provided Colab notebook handles this automatically.
 
 For Colab runtime, your local unpushed changes are not used automatically. Push your latest repository
 changes to remote first, then rerun notebook repo-sync cells.
+
+If runtime probe shows `hy3dpaint.textureGenPipeline` import error like
+`No module named 'utils.simplify_mesh_utils'; 'utils' is not a package`,
+the backend now auto-cleans common import collisions and will fallback to `hunyuan20_paint`
+when 2.1 paint is unavailable.
+
+If jobs stay at `loading_geometry` for a long time on first run, this is usually Hugging Face
+model download/warmup for `tencent/Hunyuan3D-2mv`. Check `/debug/runtime` `cache_info` to confirm.
+
+UI now shows a dedicated `Downloading Weights` stage during first-time model fetch.
+
+If runtime has no CUDA GPU (for example, Colab set to CPU), geometry will not run. In that case
+job status ends with `failure_code: "cuda_unavailable"` and stage `geometry_runtime_unavailable`.
+Switch Colab to GPU runtime and restart the backend notebook process.
 
 ## Pipeline Profiles
 
